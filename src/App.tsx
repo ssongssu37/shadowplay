@@ -13,6 +13,7 @@ import {
   listVideos,
   loadCached,
   deleteCached,
+  exportBundle,
   convertFileSrc,
 } from "./ipc";
 import { useSettings } from "./hooks/useSettings";
@@ -187,17 +188,42 @@ export default function App() {
       )}
 
       {result && result.clips.length > 0 && (
-        <PlayerControls
-          status={player.status}
-          index={player.index}
-          total={result.clips.length}
-          repeatsLeft={player.repeatsLeft}
-          totalRepeats={settings.repeats}
-          onToggle={player.toggle}
-          onPrev={player.prev}
-          onNext={player.next}
-          onReplay={player.replay}
-        />
+        <>
+          <PlayerControls
+            status={player.status}
+            index={player.index}
+            total={result.clips.length}
+            repeatsLeft={player.repeatsLeft}
+            totalRepeats={settings.repeats}
+            onToggle={player.toggle}
+            onPrev={player.prev}
+            onNext={player.next}
+            onReplay={player.replay}
+          />
+          <div className="export-row">
+            <button
+              type="button"
+              className="export-btn"
+              onClick={async () => {
+                try {
+                  const path = await exportBundle(result.video_id);
+                  setError(null);
+                  alert(
+                    `Bundle ready for AirDrop:\n${path}\n\n` +
+                      "Right-click in Finder → Share → AirDrop to your iPhone."
+                  );
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+            >
+              Export for iPhone
+            </button>
+            <span className="export-hint">
+              Saves a .shadowplay bundle to ~/Downloads.
+            </span>
+          </div>
+        </>
       )}
 
       {result && result.clips.length === 0 && (

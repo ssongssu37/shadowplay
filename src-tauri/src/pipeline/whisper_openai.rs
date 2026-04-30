@@ -1,12 +1,18 @@
 use crate::error::{AppError, AppResult};
 use crate::pipeline::whisper::{WhisperSegment, WhisperWord};
+use crate::sidecar::spawn_streaming;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
 const ENDPOINT: &str = "https://api.openai.com/v1/audio/transcriptions";
+
+/// OpenAI Whisper max upload is 25 MB. We use a slightly lower threshold so
+/// we don't get rejected on rounding edge cases.
+const MAX_UPLOAD_BYTES: u64 = 24 * 1024 * 1024;
 
 /// Transcribe via OpenAI's `whisper-1` API.
 ///
@@ -18,6 +24,7 @@ const ENDPOINT: &str = "https://api.openai.com/v1/audio/transcriptions";
 /// that for clips we care about. (For >25 MB we'd need to re-encode to a
 /// lower bitrate or chunk, but that's out of scope for Phase 2.)
 pub async fn transcribe(
+    app: &AppHandle,
     audio: &Path,
     api_key: &str,
     on_progress: Arc<dyn Fn(f32, &str) + Send + Sync>,
@@ -26,8 +33,29 @@ pub async fn transcribe(
     if api_key.trim().is_empty() {
         return Err(AppError::Other("OpenAI API key is empty".into()));
     }
-    let bytes = tokio::fs::read(audio).await?;
-    let filename = audio
+
+    // Auto-compress when over OpenAI's 25 MB limit. We re-encode to 32 kbps
+    // mono Opus in an Ogg container — small enough for ~80 minutes of
+    // speech, and Whisper transcribes the result with no quality loss
+    // (Whisper resamples to 16kHz internally anyway).
+    let upload_path: PathBuf = {
+        let size = tokio::fs::metadata(audio).await?.len();
+        if size <= MAX_UPLOAD_BYTES {
+            audio.to_path_buf()
+        } else {
+            on_progress(0.02, "Audio too large for OpenAI; compressing…");
+            compress_for_upload(app, audio, cancel.clone()).await?
+        }
+    };
+    // Keep the temp file alive for the upload, then clean up after.
+    let cleanup_path = if upload_path != audio {
+        Some(upload_path.clone())
+    } else {
+        None
+    };
+
+    let bytes = tokio::fs::read(&upload_path).await?;
+    let filename = upload_path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("audio.m4a")
@@ -100,7 +128,57 @@ pub async fn transcribe(
         .collect();
 
     on_progress(1.0, "Done.");
+
+    if let Some(p) = cleanup_path {
+        let _ = tokio::fs::remove_file(p).await;
+    }
     Ok((segments, words))
+}
+
+/// Re-encode audio to a small file suitable for the 25 MB upload limit.
+/// 32 kbps Opus mono ≈ 240 KB/min, so 100 minutes fit in ~24 MB.
+async fn compress_for_upload(
+    app: &AppHandle,
+    src: &Path,
+    cancel: CancellationToken,
+) -> AppResult<PathBuf> {
+    let dst = src.with_extension("compressed.ogg");
+    let _ = tokio::fs::remove_file(&dst).await;
+
+    let args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-i".into(),
+        src.to_string_lossy().into_owned(),
+        "-vn".into(),
+        "-ac".into(),
+        "1".into(),
+        "-c:a".into(),
+        "libopus".into(),
+        "-b:a".into(),
+        "32k".into(),
+        "-application".into(),
+        "voip".into(),
+        "-y".into(),
+        dst.to_string_lossy().into_owned(),
+    ];
+
+    let on_line: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|line: &str| {
+        let l = line.trim();
+        if !l.is_empty() {
+            tracing::warn!("ffmpeg(compress): {}", l);
+        }
+    });
+
+    let code = spawn_streaming(app, "binaries/ffmpeg", args, on_line, cancel).await?;
+    if code != 0 {
+        return Err(AppError::FFmpeg(format!("compress exit {code}")));
+    }
+    if !dst.exists() {
+        return Err(AppError::FFmpeg("compressed output missing".into()));
+    }
+    Ok(dst)
 }
 
 #[derive(Debug, Deserialize)]

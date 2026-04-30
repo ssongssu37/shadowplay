@@ -45,6 +45,7 @@ pub fn run() {
             commands::transcription::list_videos,
             commands::transcription::load_cached,
             commands::transcription::delete_cached,
+            commands::transcription::export_bundle,
             commands::system::get_default_openai_key,
         ])
         .run(tauri::generate_context!())

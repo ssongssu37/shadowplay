@@ -1,6 +1,6 @@
 [package]
 name = "shadowplay"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sentence-by-sentence YouTube shadowing player"
 edition = "2021"
 rust-version = "1.77"
@@ -29,3 +29,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 dotenvy = "0.15"
+zip = { version = "2", default-features = false, features = ["deflate"] }

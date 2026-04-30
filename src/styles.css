@@ -301,6 +301,34 @@ h1 {
   color: #6b6f7a;
 }
 
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.export-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #2a2c33;
+  background: #16181d;
+  color: #e8e9ed;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.export-btn:hover {
+  border-color: #4d5cff;
+  background: #1d1f26;
+}
+
+.export-hint {
+  font-size: 12px;
+  color: #6b6f7a;
+}
+
 .clip-list {
   border: 1px solid #2a2c33;
   background: #11131a;

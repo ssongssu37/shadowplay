@@ -38,4 +38,7 @@ export const loadCached = (videoId: string) =>
 export const deleteCached = (videoId: string) =>
   invoke<void>("delete_cached", { videoId });
 
+export const exportBundle = (videoId: string) =>
+  invoke<string>("export_bundle", { videoId });
+
 export { convertFileSrc };

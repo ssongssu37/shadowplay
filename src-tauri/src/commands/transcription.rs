@@ -180,7 +180,8 @@ pub async fn start_transcription(
                 ));
             }
             emit(&window, "transcribe", 0.0, Some("Calling OpenAI…".into()));
-            whisper_openai::transcribe(&audio_path, &key, on_whisper, cancel.clone()).await?
+            whisper_openai::transcribe(&app, &audio_path, &key, on_whisper, cancel.clone())
+                .await?
         }
         _ => {
             // Local whisper.cpp path.
@@ -255,6 +256,107 @@ pub async fn load_cached(
     video_id: String,
 ) -> AppResult<Option<TranscribeResult>> {
     cache::read(&app, &video_id)
+}
+
+/// Build a `.shadowplay` zip bundle on disk for AirDrop to the iOS app.
+/// Layout: `<videoId>.shadowplay` containing `transcript.json` + `audio.m4a`.
+/// Returns the absolute path to the created zip.
+#[tauri::command]
+pub async fn export_bundle(app: AppHandle, video_id: String) -> AppResult<String> {
+    use std::io::{Read, Write};
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+    let cached = cache::read(&app, &video_id)?
+        .ok_or_else(|| AppError::Other(format!("no cached entry for {video_id}")))?;
+    let audio_path = std::path::PathBuf::from(&cached.audio_path);
+    if !audio_path.exists() {
+        return Err(AppError::Other(format!(
+            "audio missing on disk: {}",
+            audio_path.display()
+        )));
+    }
+
+    // Output goes to ~/Downloads/<videoId>.shadowplay so the user can
+    // AirDrop straight from Finder.
+    let downloads = dirs_downloads(&app);
+    std::fs::create_dir_all(&downloads)?;
+    let out_path = downloads.join(format!("{video_id}.shadowplay"));
+    let _ = std::fs::remove_file(&out_path);
+
+    let file = std::fs::File::create(&out_path)?;
+    let mut zip = ZipWriter::new(file);
+
+    // 1. transcript.json — re-serialize in the iOS-friendly shape (drop the
+    //    Mac-specific `audio_path` since that's not portable).
+    let manifest = serde_json::json!({
+        "schema_v": 1,
+        "video_id": cached.video_id,
+        "title": cached.title,
+        "clips": cached.clips,
+        "fetched_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    zip.start_file(
+        "transcript.json",
+        SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+    )
+    .map_err(|e| AppError::Other(e.to_string()))?;
+    zip.write_all(&manifest_bytes)?;
+
+    // 2. audio.m4a — store (no compression, m4a is already compressed).
+    let mut audio_in = std::fs::File::open(&audio_path)?;
+    zip.start_file(
+        "audio.m4a",
+        SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+    )
+    .map_err(|e| AppError::Other(e.to_string()))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = audio_in.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        zip.write_all(&buf[..n])?;
+    }
+    zip.finish().map_err(|e| AppError::Other(e.to_string()))?;
+
+    // Reveal in Finder so the user can grab the file for AirDrop.
+    reveal_in_finder(&out_path);
+
+    Ok(out_path.to_string_lossy().into_owned())
+}
+
+fn dirs_downloads(app: &AppHandle) -> std::path::PathBuf {
+    use tauri::Manager;
+    if let Ok(p) = app.path().download_dir() {
+        return p;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join("Downloads");
+    }
+    std::env::temp_dir()
+}
+
+fn reveal_in_finder(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .args(["-R", &path.to_string_lossy()])
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .args(["/select,", &path.to_string_lossy()])
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = path;
+    }
 }
 
 #[tauri::command]
