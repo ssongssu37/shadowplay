@@ -1,0 +1,114 @@
+name: Build installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- toolchains ----------
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # ---------- sidecar binaries ----------
+      - name: Fetch sidecars (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: bash scripts/fetch-binaries.sh ${{ matrix.target }}
+
+      - name: Fetch sidecars (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $bin = "src-tauri/binaries"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+
+          Write-Host "==> yt-dlp.exe"
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile "$bin/yt-dlp-${{ matrix.target }}.exe"
+
+          Write-Host "==> ffmpeg.exe"
+          Invoke-WebRequest `
+            -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+            -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-extracted
+          $ff = Get-ChildItem -Path ffmpeg-extracted -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $ff.FullName "$bin/ffmpeg-${{ matrix.target }}.exe"
+          Remove-Item -Recurse -Force ffmpeg.zip,ffmpeg-extracted
+
+          Write-Host "==> whisper-cli.exe"
+          # whisper.cpp Windows release ships a zip with `main.exe` etc.
+          # We pin a known-good release; bump as needed.
+          $whisperVer = "v1.7.6"
+          $whisperZip = "whisper-bin-x64.zip"
+          Invoke-WebRequest `
+            -Uri "https://github.com/ggml-org/whisper.cpp/releases/download/$whisperVer/$whisperZip" `
+            -OutFile $whisperZip
+          Expand-Archive $whisperZip -DestinationPath whisper-extracted
+          # Newer whisper.cpp releases have whisper-cli.exe; older have main.exe.
+          $cli = Get-ChildItem -Path whisper-extracted -Recurse `
+            -Include whisper-cli.exe,main.exe | Select-Object -First 1
+          Copy-Item $cli.FullName "$bin/whisper-cli-${{ matrix.target }}.exe"
+          # Also copy any DLLs the cli depends on next to the binary so dyld
+          # equivalent (Windows loader) finds them at runtime.
+          Get-ChildItem -Path whisper-extracted -Recurse -Filter *.dll | ForEach-Object {
+            Copy-Item $_.FullName $bin
+          }
+          Remove-Item -Recurse -Force $whisperZip,whisper-extracted
+
+          Get-ChildItem $bin
+
+      # ---------- whisper model ----------
+      - name: Fetch whisper model
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          curl -L --fail --silent --show-error \
+            -o src-tauri/resources/ggml-tiny.en.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+
+      # ---------- build ----------
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "ShadowPlay ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

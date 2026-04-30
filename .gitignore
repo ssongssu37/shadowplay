@@ -1,0 +1,39 @@
+# secrets
+.env
+.env.local
+
+# node
+node_modules
+dist
+dist-ssr
+*.local
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# rust
+src-tauri/target
+src-tauri/Cargo.lock
+
+# whisper-cli dylib staging (build.rs symlinks these in for dev)
+src-tauri/lib
+
+# sidecar binaries — fetched by scripts/fetch-binaries.* per platform.
+# Don't commit them (yt-dlp alone is 35 MB).
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+!src-tauri/binaries/README.md
+
+# downloaded model
+src-tauri/resources/ggml-*.bin
+
+# logs
+*.log
