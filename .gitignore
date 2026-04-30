@@ -8,6 +8,11 @@ dist
 dist-ssr
 *.local
 
+# tsc -b output
+tsconfig.tsbuildinfo
+vite.config.d.ts
+vite.config.js
+
 # editor
 .vscode/*
 !.vscode/extensions.json

@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/ipc.ts","./src/main.tsx","./src/types.ts","./src/components/cliplist.tsx","./src/components/library.tsx","./src/components/playercontrols.tsx","./src/components/progressview.tsx","./src/components/settingspanel.tsx","./src/components/urlbar.tsx","./src/hooks/usesettings.ts","./src/hooks/useshadowplayer.ts"],"version":"5.9.3"}
