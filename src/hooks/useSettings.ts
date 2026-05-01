@@ -3,6 +3,12 @@ import { useEffect, useState } from "react";
 export type Backend = "local" | "openai";
 export type GapMode = "auto" | "fixed";
 export type Repeats = 1 | 2 | 3 | 4 | 5;
+export type ChunkingModel =
+  | "gpt-4o-mini"
+  | "gpt-4o"
+  | "gpt-4.1-mini"
+  | "gpt-4.1"
+  | "gpt-4.1-nano";
 
 export interface AppSettings {
   backend: Backend;
@@ -11,6 +17,7 @@ export interface AppSettings {
   // gpt-4o-mini for thought-group segmentation instead of relying on
   // Whisper's punctuation. ~$0.0005 per video.
   smartChunking: boolean;
+  chunkingModel: ChunkingModel; // OpenAI model id used by the two-pass chunker
   chunkMaxWords: number; // 4..25, hard upper bound on words per thought group
   chunkMaxSeconds: number; // 2..15, hard upper bound on clip duration
   chunkMinWords: number; // 1..max, floor — short clips get merged
@@ -28,6 +35,7 @@ const DEFAULTS: AppSettings = {
   backend: "local",
   openaiApiKey: "",
   smartChunking: true,
+  chunkingModel: "gpt-4o-mini",
   chunkMaxWords: 12,
   chunkMaxSeconds: 5,
   chunkMinWords: 4,

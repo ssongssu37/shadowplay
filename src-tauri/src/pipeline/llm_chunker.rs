@@ -34,7 +34,26 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
-const MODEL: &str = "gpt-4o-mini";
+const DEFAULT_MODEL: &str = "gpt-4o-mini";
+
+/// Whitelist the user-pickable models. Anything outside this set falls back
+/// to DEFAULT_MODEL so a typo'd settings value can't break the app.
+const ALLOWED_MODELS: &[&str] = &[
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4.1-nano",
+];
+
+fn pick_model(requested: &str) -> &'static str {
+    for &m in ALLOWED_MODELS {
+        if m == requested {
+            return m;
+        }
+    }
+    DEFAULT_MODEL
+}
 
 /// Words per pass-A LLM call. Long videos are split into windows of this size.
 const WINDOW_WORDS: usize = 1500;
@@ -52,8 +71,10 @@ pub async fn chunk_with_llm(
     api_key: &str,
     max_words: u32,
     max_seconds: f64,
+    model: &str,
     cancel: CancellationToken,
 ) -> AppResult<ChunkResult> {
+    let model = pick_model(model);
     if api_key.trim().is_empty() {
         return Err(AppError::Other("OpenAI API key is empty".into()));
     }
@@ -75,6 +96,7 @@ pub async fn chunk_with_llm(
         let local = pass_a_sentences(
             window,
             api_key,
+            model,
             &client,
             cancel.clone(),
             start > 0,
@@ -106,6 +128,7 @@ pub async fn chunk_with_llm(
             sub_window,
             api_key,
             max_words,
+            model,
             &client,
             cancel.clone(),
         )
@@ -149,6 +172,7 @@ pub async fn chunk_with_llm(
 async fn pass_a_sentences(
     window: &[WhisperWord],
     api_key: &str,
+    model: &str,
     client: &reqwest::Client,
     cancel: CancellationToken,
     is_continuation: bool,
@@ -158,6 +182,7 @@ async fn pass_a_sentences(
     call_chat_for_groups(
         client,
         api_key,
+        model,
         cancel,
         "You are a sentence detector for an English shadowing app. \
          You always return valid JSON with a `groups` field.",
@@ -232,6 +257,7 @@ async fn pass_b_subdivide(
     sentence_words: &[WhisperWord],
     api_key: &str,
     max_words: u32,
+    model: &str,
     client: &reqwest::Client,
     cancel: CancellationToken,
 ) -> AppResult<Vec<(usize, usize)>> {
@@ -239,6 +265,7 @@ async fn pass_b_subdivide(
     call_chat_for_groups(
         client,
         api_key,
+        model,
         cancel,
         "You split English sentences into shadowing-friendly chunks for language learners. \
          You always return valid JSON with a `groups` field.",
@@ -299,12 +326,13 @@ Words:\n"
 async fn call_chat_for_groups(
     client: &reqwest::Client,
     api_key: &str,
+    model: &str,
     cancel: CancellationToken,
     system_prompt: &str,
     user_prompt: &str,
 ) -> AppResult<Vec<(usize, usize)>> {
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "response_format": { "type": "json_object" },
         "temperature": 0.2,
         "messages": [

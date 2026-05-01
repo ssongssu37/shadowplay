@@ -1,9 +1,22 @@
 import type {
   AppSettings,
   Backend,
+  ChunkingModel,
   GapMode,
   Repeats,
 } from "../hooks/useSettings";
+
+const MODEL_OPTIONS: {
+  value: ChunkingModel;
+  label: string;
+  hint: string;
+}[] = [
+  { value: "gpt-4o-mini", label: "4o-mini", hint: "Cheapest (~$0.001/video)" },
+  { value: "gpt-4.1-nano", label: "4.1-nano", hint: "Newer, similar cost" },
+  { value: "gpt-4.1-mini", label: "4.1-mini", hint: "Better grammar (~$0.003)" },
+  { value: "gpt-4.1", label: "4.1", hint: "High quality (~$0.02)" },
+  { value: "gpt-4o", label: "4o", hint: "Premium fallback (~$0.02)" },
+];
 
 interface Props {
   settings: AppSettings;
@@ -89,6 +102,23 @@ export function SettingsPanel({ settings, onChange, disabled }: Props) {
       </div>
       {settings.smartChunking && settings.openaiApiKey.trim() && (
         <>
+          <div className="settings-row">
+            <span className="settings-label">Chunker model</span>
+            <div className="segmented">
+              {MODEL_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={settings.chunkingModel === opt.value ? "on" : ""}
+                  onClick={() => set({ chunkingModel: opt.value })}
+                  disabled={disabled}
+                  title={opt.hint}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-row">
             <span className="settings-label">Min words</span>
             <div className="settings-slider">

@@ -41,6 +41,9 @@ pub struct TranscribeOptions {
     /// Minimum chunk duration in seconds. Defaults to 1.0.
     #[serde(default)]
     pub chunk_min_seconds: Option<f64>,
+    /// OpenAI model id for the chunker. Defaults to gpt-4o-mini.
+    #[serde(default)]
+    pub chunking_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +250,10 @@ pub async fn start_transcription(
         .chunk_min_seconds
         .unwrap_or(1.0)
         .clamp(0.0, max_seconds);
+    let chunking_model = options
+        .chunking_model
+        .clone()
+        .unwrap_or_else(|| "gpt-4o-mini".into());
     let llm_key = options
         .openai_api_key
         .as_deref()
@@ -268,6 +275,7 @@ pub async fn start_transcription(
             &llm_key,
             max_words,
             max_seconds,
+            &chunking_model,
             cancel.clone(),
         )
         .await
@@ -382,6 +390,10 @@ pub async fn re_chunk(
         .chunk_min_seconds
         .unwrap_or(1.0)
         .clamp(0.0, max_seconds);
+    let chunking_model = options
+        .chunking_model
+        .clone()
+        .unwrap_or_else(|| "gpt-4o-mini".into());
     let llm_key = options
         .openai_api_key
         .as_deref()
@@ -399,6 +411,7 @@ pub async fn re_chunk(
             &llm_key,
             max_words,
             max_seconds,
+            &chunking_model,
             cancel.clone(),
         )
         .await

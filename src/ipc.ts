@@ -11,6 +11,7 @@ export interface TranscribeOptions {
   backend: "local" | "openai";
   openaiApiKey?: string;
   smartChunking?: boolean;
+  chunkingModel?: string;
   chunkMaxWords?: number;
   chunkMaxSeconds?: number;
   chunkMinWords?: number;
@@ -27,6 +28,7 @@ export const startTranscription = (
       backend: options.backend,
       openaiApiKey: options.openaiApiKey ?? "",
       smartChunking: options.smartChunking ?? false,
+      chunkingModel: options.chunkingModel ?? "gpt-4o-mini",
       chunkMaxWords: options.chunkMaxWords ?? 12,
       chunkMaxSeconds: options.chunkMaxSeconds ?? 5,
       chunkMinWords: options.chunkMinWords ?? 4,
@@ -41,6 +43,7 @@ export const reChunk = (videoId: string, options: TranscribeOptions) =>
       backend: options.backend,
       openaiApiKey: options.openaiApiKey ?? "",
       smartChunking: options.smartChunking ?? false,
+      chunkingModel: options.chunkingModel ?? "gpt-4o-mini",
       chunkMaxWords: options.chunkMaxWords ?? 12,
       chunkMaxSeconds: options.chunkMaxSeconds ?? 5,
       chunkMinWords: options.chunkMinWords ?? 4,
