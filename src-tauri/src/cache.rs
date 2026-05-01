@@ -12,6 +12,7 @@
 use crate::commands::transcription::TranscribeResult;
 use crate::error::AppResult;
 use crate::paths;
+use crate::pipeline::whisper::{WhisperSegment, WhisperWord};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -24,15 +25,38 @@ pub struct CacheEntry {
     pub audio_path: String,
     pub clips: Vec<crate::commands::transcription::Clip>,
     pub fetched_at: i64, // unix seconds
+    /// Raw whisper segments/words. Present in schema_v >= 2 entries — lets
+    /// us re-chunk without re-transcribing. Optional so older entries
+    /// continue to load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<WhisperSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<WhisperWord>>,
 }
 
-const SCHEMA: u32 = 1;
+/// schema_v 1: clips-only.
+/// schema_v 2: + raw segments/words for re-chunking.
+const SCHEMA: u32 = 2;
+const MIN_READABLE_SCHEMA: u32 = 1;
 
 fn entry_path(app: &AppHandle, video_id: &str) -> AppResult<PathBuf> {
     Ok(paths::cache_dir(app)?.join(format!("{video_id}.json")))
 }
 
 pub fn read(app: &AppHandle, video_id: &str) -> AppResult<Option<TranscribeResult>> {
+    Ok(read_entry(app, video_id)?.map(|entry| TranscribeResult {
+        video_id: entry.video_id,
+        title: entry.title,
+        audio_path: entry.audio_path,
+        clips: entry.clips,
+        from_cache: true,
+    }))
+}
+
+/// Read the full cache entry including any raw segments/words — used by the
+/// re-chunk command. Returns None for missing entries or when schema is too
+/// new/old to read.
+pub fn read_entry(app: &AppHandle, video_id: &str) -> AppResult<Option<CacheEntry>> {
     let path = entry_path(app, video_id)?;
     if !path.exists() {
         return Ok(None);
@@ -48,7 +72,7 @@ pub fn read(app: &AppHandle, video_id: &str) -> AppResult<Option<TranscribeResul
             return Ok(None);
         }
     };
-    if entry.schema_v != SCHEMA {
+    if entry.schema_v < MIN_READABLE_SCHEMA || entry.schema_v > SCHEMA {
         return Ok(None);
     }
     if !PathBuf::from(&entry.audio_path).exists() {
@@ -56,16 +80,17 @@ pub fn read(app: &AppHandle, video_id: &str) -> AppResult<Option<TranscribeResul
         let _ = std::fs::remove_file(&path);
         return Ok(None);
     }
-    Ok(Some(TranscribeResult {
-        video_id: entry.video_id,
-        title: entry.title,
-        audio_path: entry.audio_path,
-        clips: entry.clips,
-        from_cache: true,
-    }))
+    Ok(Some(entry))
 }
 
-pub fn write(app: &AppHandle, result: &TranscribeResult) -> AppResult<()> {
+/// Write a cache entry, optionally including the raw transcript so the
+/// re-chunk command can run later without re-transcribing.
+pub fn write_full(
+    app: &AppHandle,
+    result: &TranscribeResult,
+    segments: Option<Vec<WhisperSegment>>,
+    words: Option<Vec<WhisperWord>>,
+) -> AppResult<()> {
     let path = entry_path(app, &result.video_id)?;
     let entry = CacheEntry {
         schema_v: SCHEMA,
@@ -74,6 +99,8 @@ pub fn write(app: &AppHandle, result: &TranscribeResult) -> AppResult<()> {
         audio_path: result.audio_path.clone(),
         clips: result.clips.clone(),
         fetched_at: now_unix(),
+        segments,
+        words,
     };
     let json = serde_json::to_vec_pretty(&entry)?;
     std::fs::write(&path, json)?;
@@ -109,7 +136,7 @@ pub fn list(app: &AppHandle) -> AppResult<Vec<VideoSummary>> {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if entry.schema_v != SCHEMA {
+        if entry.schema_v < MIN_READABLE_SCHEMA || entry.schema_v > SCHEMA {
             continue;
         }
         if !PathBuf::from(&entry.audio_path).exists() {

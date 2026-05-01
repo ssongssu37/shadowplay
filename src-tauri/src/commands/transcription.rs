@@ -1,7 +1,8 @@
 use crate::cache;
 use crate::error::{AppError, AppResult};
 use crate::paths;
-use crate::pipeline::{ffmpeg, harvester, whisper, whisper_openai, ytdlp};
+use crate::pipeline::whisper::WhisperSegment;
+use crate::pipeline::{ffmpeg, harvester, llm_chunker, whisper, whisper_openai, ytdlp};
 use crate::state::{AppState, JobHandle};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -14,9 +15,32 @@ pub struct TranscribeOptions {
     /// "local" (default) or "openai".
     #[serde(default)]
     pub backend: Option<String>,
-    /// Required when backend == "openai".
+    /// Required when backend == "openai", optional otherwise — used by the
+    /// LLM chunker even when transcription itself is local.
     #[serde(default)]
     pub openai_api_key: Option<String>,
+    /// When true and an OpenAI key is available, send the raw word stream
+    /// to gpt-4o-mini for thought-group segmentation instead of harvesting
+    /// from Whisper's punctuation.
+    #[serde(default)]
+    pub smart_chunking: Option<bool>,
+    /// Maximum words per chunk for the LLM segmenter. The LLM is told to
+    /// stay strictly at or under this; oversized returns are split server-
+    /// side to guarantee compliance. Defaults to 12.
+    #[serde(default, alias = "chunkTargetWords", alias = "chunk_target_words")]
+    pub chunk_max_words: Option<u32>,
+    /// Hard cap on chunk duration in seconds. Any clip exceeding this is
+    /// bisected at a word boundary near its temporal midpoint. Defaults to
+    /// 5.0.
+    #[serde(default)]
+    pub chunk_max_seconds: Option<f64>,
+    /// Minimum words per chunk. Clips below this are merged into a
+    /// neighbor (subject to the max caps). Defaults to 4.
+    #[serde(default)]
+    pub chunk_min_words: Option<u32>,
+    /// Minimum chunk duration in seconds. Defaults to 1.0.
+    #[serde(default)]
+    pub chunk_min_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,9 +233,86 @@ pub async fn start_transcription(
         words.len()
     );
 
-    // Stage 4: harvest sentence-shaped clips for shadowing.
+    // Stage 4: harvest thought-group-shaped clips for shadowing. Prefer the
+    // LLM chunker when smart chunking is on AND we have an OpenAI key (which
+    // we may already have from the OpenAI transcription path, or directly
+    // from Settings even when transcription was local). Fall back to the
+    // punctuation harvester on any failure so the app keeps working.
     emit(&window, "harvest", 0.0, Some("Harvesting clips…".into()));
-    let clips = harvester::harvest(&segments, &words);
+    let smart_on = options.smart_chunking.unwrap_or(false);
+    let max_words = options.chunk_max_words.unwrap_or(12).clamp(4, 25);
+    let max_seconds = options.chunk_max_seconds.unwrap_or(5.0).clamp(2.0, 15.0);
+    let min_words = options.chunk_min_words.unwrap_or(4).clamp(1, max_words);
+    let min_seconds = options
+        .chunk_min_seconds
+        .unwrap_or(1.0)
+        .clamp(0.0, max_seconds);
+    let llm_key = options
+        .openai_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+        .unwrap_or_default();
+
+    let (raw_clips, sentence_end_ms) = if smart_on && !llm_key.is_empty() && !words.is_empty() {
+        emit(
+            &window,
+            "harvest",
+            0.3,
+            Some("Pass A: detecting sentences…".into()),
+        );
+        match llm_chunker::chunk_with_llm(
+            &words,
+            &llm_key,
+            max_words,
+            max_seconds,
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok(r) if !r.clips.is_empty() => {
+                tracing::info!(
+                    "LLM chunker produced {} clips ({} sentence boundaries)",
+                    r.clips.len(),
+                    r.sentence_end_ms.len()
+                );
+                (r.clips, r.sentence_end_ms)
+            }
+            Ok(_) => {
+                tracing::warn!("LLM chunker returned 0 clips; falling back to harvester");
+                (
+                    harvester::harvest(&segments, &words),
+                    sentence_ends_from_segments(&segments),
+                )
+            }
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(e) => {
+                tracing::warn!("LLM chunker failed: {e}; falling back to harvester");
+                (
+                    harvester::harvest(&segments, &words),
+                    sentence_ends_from_segments(&segments),
+                )
+            }
+        }
+    } else {
+        (
+            harvester::harvest(&segments, &words),
+            sentence_ends_from_segments(&segments),
+        )
+    };
+    // Final pass — split oversized, merge undersized (sentence-aware), then
+    // boundary-fix any clip ending on a stop word.
+    let clips = llm_chunker::enforce_clip_bounds(
+        raw_clips,
+        &sentence_end_ms,
+        &words,
+        max_words,
+        max_seconds,
+        min_words,
+        min_seconds,
+    );
     emit(&window, "harvest", 1.0, None);
     tracing::info!("harvested {} clips", clips.len());
     if let Some(c) = clips.first() {
@@ -239,8 +340,109 @@ pub async fn start_transcription(
         clips,
         from_cache: false,
     };
-    if let Err(e) = cache::write(&app, &result) {
+    if let Err(e) = cache::write_full(&app, &result, Some(segments), Some(words)) {
         tracing::warn!("cache write failed: {e}");
+    }
+    Ok(result)
+}
+
+/// Re-run only the chunking step on a previously-transcribed video. Reads
+/// the cached raw transcript (segments + words), runs the LLM chunker (or
+/// the harvester if smart chunking is off), writes the new clips back to
+/// the cache, and returns the updated result.
+///
+/// Errors when the cache entry was written before schema_v 2 (no raw
+/// transcript saved). User must re-process the video once to populate the
+/// new fields.
+#[tauri::command]
+pub async fn re_chunk(
+    app: AppHandle,
+    window: Window,
+    video_id: String,
+    options: Option<TranscribeOptions>,
+) -> AppResult<TranscribeResult> {
+    let options = options.unwrap_or_default();
+    let entry = cache::read_entry(&app, &video_id)?
+        .ok_or_else(|| AppError::Other(format!("no cached entry for {video_id}")))?;
+
+    let segments = entry.segments.ok_or_else(|| {
+        AppError::Other(
+            "This video was cached before smart chunking existed. \
+             Delete it from the library and paste the URL again to enable re-chunking."
+                .into(),
+        )
+    })?;
+    let words = entry.words.unwrap_or_default();
+
+    let smart_on = options.smart_chunking.unwrap_or(false);
+    let max_words = options.chunk_max_words.unwrap_or(12).clamp(4, 25);
+    let max_seconds = options.chunk_max_seconds.unwrap_or(5.0).clamp(2.0, 15.0);
+    let min_words = options.chunk_min_words.unwrap_or(4).clamp(1, max_words);
+    let min_seconds = options
+        .chunk_min_seconds
+        .unwrap_or(1.0)
+        .clamp(0.0, max_seconds);
+    let llm_key = options
+        .openai_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+        .unwrap_or_default();
+
+    emit(&window, "harvest", 0.0, Some("Re-chunking…".into()));
+    let cancel = CancellationToken::new();
+    let (raw_clips, sentence_end_ms) = if smart_on && !llm_key.is_empty() && !words.is_empty() {
+        match llm_chunker::chunk_with_llm(
+            &words,
+            &llm_key,
+            max_words,
+            max_seconds,
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok(r) if !r.clips.is_empty() => (r.clips, r.sentence_end_ms),
+            Ok(_) => (
+                harvester::harvest(&segments, &words),
+                sentence_ends_from_segments(&segments),
+            ),
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(e) => {
+                tracing::warn!("LLM chunker failed during re-chunk: {e}; falling back");
+                (
+                    harvester::harvest(&segments, &words),
+                    sentence_ends_from_segments(&segments),
+                )
+            }
+        }
+    } else {
+        (
+            harvester::harvest(&segments, &words),
+            sentence_ends_from_segments(&segments),
+        )
+    };
+    let clips = llm_chunker::enforce_clip_bounds(
+        raw_clips,
+        &sentence_end_ms,
+        &words,
+        max_words,
+        max_seconds,
+        min_words,
+        min_seconds,
+    );
+    emit(&window, "harvest", 1.0, None);
+
+    let result = TranscribeResult {
+        video_id: entry.video_id,
+        title: entry.title,
+        audio_path: entry.audio_path,
+        clips,
+        from_cache: false,
+    };
+    if let Err(e) = cache::write_full(&app, &result, Some(segments), Some(words)) {
+        tracing::warn!("cache write failed during re-chunk: {e}");
     }
     Ok(result)
 }
@@ -383,4 +585,18 @@ pub async fn cancel_transcription(state: State<'_, AppState>) -> AppResult<()> {
         job.cancel.cancel();
     }
     Ok(())
+}
+
+/// Used as a fallback signal when the LLM chunker isn't available — derive
+/// sentence boundaries from Whisper's own punctuation. Imperfect (Whisper
+/// puts periods at breath pauses), but better than no signal at all.
+fn sentence_ends_from_segments(segments: &[WhisperSegment]) -> Vec<u32> {
+    segments
+        .iter()
+        .filter(|s| {
+            let t = s.text.trim();
+            t.ends_with('.') || t.ends_with('!') || t.ends_with('?')
+        })
+        .map(|s| (s.end * 1000.0).round().max(0.0) as u32)
+        .collect()
 }

@@ -58,6 +58,122 @@ export function SettingsPanel({ settings, onChange, disabled }: Props) {
         </div>
       )}
 
+      {/* Smart chunking — usable whenever a key is set, even with the local
+          backend. Falls back silently to punctuation-based harvesting if the
+          API call fails. */}
+      <div className="settings-row">
+        <span className="settings-label">Smart chunking</span>
+        <div className="segmented">
+          <button
+            type="button"
+            className={settings.smartChunking ? "on" : ""}
+            onClick={() => set({ smartChunking: true })}
+            disabled={disabled || !settings.openaiApiKey.trim()}
+            title={
+              settings.openaiApiKey.trim()
+                ? "Use gpt-4o-mini to split into thought groups"
+                : "Requires an OpenAI API key"
+            }
+          >
+            On
+          </button>
+          <button
+            type="button"
+            className={!settings.smartChunking ? "on" : ""}
+            onClick={() => set({ smartChunking: false })}
+            disabled={disabled}
+          >
+            Off
+          </button>
+        </div>
+      </div>
+      {settings.smartChunking && settings.openaiApiKey.trim() && (
+        <>
+          <div className="settings-row">
+            <span className="settings-label">Min words</span>
+            <div className="settings-slider">
+              <input
+                type="range"
+                min={1}
+                max={Math.max(1, settings.chunkMaxWords)}
+                step={1}
+                value={Math.min(settings.chunkMinWords, settings.chunkMaxWords)}
+                onChange={(e) =>
+                  set({ chunkMinWords: parseInt(e.target.value, 10) })
+                }
+                disabled={disabled}
+              />
+              <span className="settings-slider-value">
+                ≥ {Math.min(settings.chunkMinWords, settings.chunkMaxWords)} words
+              </span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Max words</span>
+            <div className="settings-slider">
+              <input
+                type="range"
+                min={4}
+                max={25}
+                step={1}
+                value={settings.chunkMaxWords}
+                onChange={(e) =>
+                  set({ chunkMaxWords: parseInt(e.target.value, 10) })
+                }
+                disabled={disabled}
+              />
+              <span className="settings-slider-value">
+                ≤ {settings.chunkMaxWords} words
+              </span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Min length</span>
+            <div className="settings-slider">
+              <input
+                type="range"
+                min={0}
+                max={settings.chunkMaxSeconds}
+                step={0.5}
+                value={Math.min(
+                  settings.chunkMinSeconds,
+                  settings.chunkMaxSeconds
+                )}
+                onChange={(e) =>
+                  set({ chunkMinSeconds: parseFloat(e.target.value) })
+                }
+                disabled={disabled}
+              />
+              <span className="settings-slider-value">
+                ≥ {Math.min(
+                  settings.chunkMinSeconds,
+                  settings.chunkMaxSeconds
+                ).toFixed(1)}s
+              </span>
+            </div>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Max length</span>
+            <div className="settings-slider">
+              <input
+                type="range"
+                min={2}
+                max={15}
+                step={0.5}
+                value={settings.chunkMaxSeconds}
+                onChange={(e) =>
+                  set({ chunkMaxSeconds: parseFloat(e.target.value) })
+                }
+                disabled={disabled}
+              />
+              <span className="settings-slider-value">
+                ≤ {settings.chunkMaxSeconds.toFixed(1)}s
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Player settings — always editable, even mid-playback */}
       <div className="settings-divider" />
       <div className="settings-row">

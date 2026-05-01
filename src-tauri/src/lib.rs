@@ -41,6 +41,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::transcription::start_transcription,
+            commands::transcription::re_chunk,
             commands::transcription::cancel_transcription,
             commands::transcription::list_videos,
             commands::transcription::load_cached,

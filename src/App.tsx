@@ -14,6 +14,7 @@ import {
   loadCached,
   deleteCached,
   exportBundle,
+  reChunk,
   convertFileSrc,
 } from "./ipc";
 import { useSettings } from "./hooks/useSettings";
@@ -116,6 +117,11 @@ export default function App() {
       const r = await startTranscription(url, {
         backend: settings.backend,
         openaiApiKey: settings.openaiApiKey,
+        smartChunking: settings.smartChunking,
+        chunkMaxWords: settings.chunkMaxWords,
+        chunkMaxSeconds: settings.chunkMaxSeconds,
+        chunkMinWords: settings.chunkMinWords,
+        chunkMinSeconds: settings.chunkMinSeconds,
       });
       setResult(r);
       refreshLibrary();
@@ -218,6 +224,35 @@ export default function App() {
               }}
             >
               Export for iPhone
+            </button>
+            <button
+              type="button"
+              className="export-btn"
+              onClick={async () => {
+                setError(null);
+                setIsRunning(true);
+                try {
+                  const r = await reChunk(result.video_id, {
+                    backend: settings.backend,
+                    openaiApiKey: settings.openaiApiKey,
+                    smartChunking: settings.smartChunking,
+                    chunkMaxWords: settings.chunkMaxWords,
+        chunkMaxSeconds: settings.chunkMaxSeconds,
+        chunkMinWords: settings.chunkMinWords,
+        chunkMinSeconds: settings.chunkMinSeconds,
+                  });
+                  setResult(r);
+                  refreshLibrary();
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setIsRunning(false);
+                }
+              }}
+              disabled={isRunning}
+              title="Re-run chunking with current Settings without re-transcribing"
+            >
+              Re-chunk
             </button>
             <span className="export-hint">
               Saves a .shadowplay bundle to ~/Downloads.

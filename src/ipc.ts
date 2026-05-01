@@ -10,6 +10,11 @@ export const onProgress = (
 export interface TranscribeOptions {
   backend: "local" | "openai";
   openaiApiKey?: string;
+  smartChunking?: boolean;
+  chunkMaxWords?: number;
+  chunkMaxSeconds?: number;
+  chunkMinWords?: number;
+  chunkMinSeconds?: number;
 }
 
 export const startTranscription = (
@@ -21,6 +26,25 @@ export const startTranscription = (
     options: {
       backend: options.backend,
       openaiApiKey: options.openaiApiKey ?? "",
+      smartChunking: options.smartChunking ?? false,
+      chunkMaxWords: options.chunkMaxWords ?? 12,
+      chunkMaxSeconds: options.chunkMaxSeconds ?? 5,
+      chunkMinWords: options.chunkMinWords ?? 4,
+      chunkMinSeconds: options.chunkMinSeconds ?? 1,
+    },
+  });
+
+export const reChunk = (videoId: string, options: TranscribeOptions) =>
+  invoke<TranscribeResult>("re_chunk", {
+    videoId,
+    options: {
+      backend: options.backend,
+      openaiApiKey: options.openaiApiKey ?? "",
+      smartChunking: options.smartChunking ?? false,
+      chunkMaxWords: options.chunkMaxWords ?? 12,
+      chunkMaxSeconds: options.chunkMaxSeconds ?? 5,
+      chunkMinWords: options.chunkMinWords ?? 4,
+      chunkMinSeconds: options.chunkMinSeconds ?? 1,
     },
   });
 
